@@ -114,6 +114,7 @@ from .models.query import (
 # --- Enums ---
 from .enum import (
     SerializationFormat as SerializationFormat,
+    SessionStatus as SessionStatus,
     SequenceStatus as SequenceStatus,
     OnErrorPolicy as OnErrorPolicy,
 )
@@ -200,6 +201,7 @@ __all__ = [
     "QueryResponse",
     # Enums
     "SerializationFormat",
+    "SessionStatus",
     "SequenceStatus",
     "OnErrorPolicy",
 ]

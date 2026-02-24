@@ -1,12 +1,12 @@
 from enum import Enum
 
 
-class SequenceStatus(Enum):
+class SessionStatus(Enum):
     """
-    Represents the operational lifecycle state of a Sequence during the ingestion process
+    Represents the operational lifecycle state of a session upload for a Sequence during the ingestion process
     (see also [`SequenceWriter`][mosaicolabs.handlers.SequenceWriter]).
 
-    This enumeration tracks the state of a sequence from its initial creation through
+    This enumeration tracks the state of a session from its initial creation through
     data writing until it reaches a terminal state (Finalized or Error).
 
 
@@ -17,27 +17,27 @@ class SequenceStatus(Enum):
     The initial state of a writer before server-side registration.
     
     In this state, the local [`SequenceWriter`][mosaicolabs.handlers.SequenceWriter] instance 
-    has been created but the `SEQUENCE_CREATE` handshake has not yet been performed 
+    has been created but the `SESSION_CREATE` handshake has not yet been performed 
     or completed.
     """
 
     Pending = "pending"
     """
-    The sequence is registered on the server and actively accepting data.
+    The session is registered on the server and actively accepting data.
     
     This state is entered upon successful execution of the `__enter__` method
     of the [`SequenceWriter`][mosaicolabs.handlers.SequenceWriter] class.
-    While pending, the sequence allows for the 
+    While pending, the session allows for the 
     creation of new topics and the ingestion of data batches.
     """
 
     Finalized = "finalized"
     """
-    The sequence has been successfully closed and its data is now immutable.
+    The session has been successfully closed and its data is now immutable.
     
     This terminal state indicates that the `SequenceWriter._finalize()`
     action was acknowledged by the server. Once finalized, 
-    the sequence is typically **locked** and cannot be deleted unless explicitly 
+    the session is typically **locked** and cannot be deleted unless explicitly 
     unlocked by an administrator.
     """
 
@@ -50,3 +50,10 @@ class SequenceStatus(Enum):
     [`OnErrorPolicy`][mosaicolabs.enum.OnErrorPolicy], the data may have been 
     purged (`Delete`) or retained in an **unlocked** state for debugging (`Report`).
     """
+
+
+# Set the same for now. Can be made different in the future
+SequenceStatus = SessionStatus
+"""
+Alias for [`SessionStatus`][mosaicolabs.enum.SessionStatus].
+"""

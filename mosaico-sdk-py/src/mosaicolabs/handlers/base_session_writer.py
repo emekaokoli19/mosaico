@@ -14,17 +14,17 @@ from logging import Logger
 from mosaicolabs.handlers.config import WriterConfig
 from mosaicolabs.handlers.helpers import _make_exception, _validate_topic_name
 from mosaicolabs.handlers.topic_writer import TopicWriter
-from mosaicolabs.comm.do_action import _do_action, _DoActionResponseKey
+from mosaicolabs.comm.do_action import _do_action, _DoActionResponseUUID
 from mosaicolabs.comm.connection import _ConnectionPool
 from mosaicolabs.comm.executor_pool import _ExecutorPool
-from mosaicolabs.enum import FlightAction, OnErrorPolicy, SequenceStatus
+from mosaicolabs.enum import FlightAction, OnErrorPolicy, SessionStatus
 from mosaicolabs.helpers import pack_topic_resource_name
 from mosaicolabs.models import Serializable
 
 
-class BaseSequenceWriter(ABC):
+class BaseSessionWriter(ABC):
     """
-    Abstract base class that orchestrates the creation and data ingestion lifecycle of a Mosaico Sequence.
+    Abstract base class that orchestrates the creation and data ingestion lifecycle of a Mosaico Session.
 
     This is the central controller for high-performance managing:
 
@@ -71,21 +71,21 @@ class BaseSequenceWriter(ABC):
             config: Operational configuration (e.g., error policies, batch sizes).
         """
         self._name: str = sequence_name
-        """The name of the new sequence"""
+        """The name of the sequence this session refers to"""
         self._config: WriterConfig = config
         """The config of the writer"""
         self._topic_writers: Dict[str, TopicWriter] = {}
         """The cache of the spawned topic writers"""
         self._control_client: fl.FlightClient = client
-        """The FlightClient used for operations (creating topics, finalizing sequence)."""
+        """The FlightClient used for operations (creating topics, finalizing session)."""
         self._connection_pool: Optional[_ConnectionPool] = connection_pool
         """The pool of FlightClients available for data streaming."""
         self._executor_pool: Optional[_ExecutorPool] = executor_pool
         """The pool of ThreadPoolExecutors available for asynch I/O."""
-        self._sequence_status: SequenceStatus = SequenceStatus.Null
-        """The status of the new sequence"""
-        self._key: Optional[str] = None
-        """The key for remote handshaking"""
+        self._status: SessionStatus = SessionStatus.Null
+        """The status of the new session"""
+        self._uuid: Optional[str] = None
+        """The session uuid for remote handshaking"""
         self._entered: bool = False
         """Tag for inspecting if the writer is used in a 'with' context"""
         self._logger: Logger = logger
@@ -95,6 +95,32 @@ class BaseSequenceWriter(ABC):
     def _on_context_enter(self):
         pass
 
+    def _init_session(self, sequence_name: str):
+        """
+        Initializes a new session on the existing remote resource.
+
+        Args:
+            sequence_name: The name of the sequence to create.
+        """
+
+        # Send the `SESSION_CREATE` action, to start a new session on the existing remote resource.
+        act_resp = _do_action(
+            client=self._control_client,
+            action=FlightAction.SESSION_CREATE,
+            payload={
+                "locator": sequence_name,
+            },
+            expected_type=_DoActionResponseUUID,
+        )
+        if act_resp is None:
+            raise Exception(
+                f"Action '{FlightAction.SESSION_CREATE.value}' returned no response."
+            )
+
+        self._uuid = act_resp.uuid
+        self._entered = True
+        self._status = SessionStatus.Pending
+
     def _on_context_exit(
         self,
         exc_type: Optional[Type[BaseException]],
@@ -102,7 +128,7 @@ class BaseSequenceWriter(ABC):
         exc_tb: Optional[Any],
     ) -> None:
         """
-        Executes the default finalization and cleanup logic for the sequence.
+        Executes the default finalization and cleanup logic for the session.
 
         **Summary of Operations:**
         1.  **Detection**: Determines if the context was exited due to an error
@@ -114,18 +140,18 @@ class BaseSequenceWriter(ABC):
               ensure immediate resource release without data integrity guarantees.
         3.  **Server Lifecycle Handshake**:
             - **Success Path**: Calls `self.close()` to send a finalization signal
-              (default: `SEQUENCE_FINALIZE`) to the server.
+              (default: `SESSION_FINALIZE`) to the server.
             - **Error Path**: Evaluates the `WriterConfig.on_error` policy to either
-              `_abort()` (delete the sequence) or `_error_report()` to the server.
-        4.  **Status Integrity**: Updates the internal `_sequence_status` to `Error`
+              `_abort()` (delete the session) or `_error_report()` to the server.
+        4.  **Status Integrity**: Updates the internal `_status` to `Error`
             if any part of the process fails.
 
         .. Notes::
-        - Override this method if your specific sequence implementation requires
+        - Override this method if your specific session implementation requires
         custom teardown logic that differs from the standard Mosaico flow.
         Examples include:
             - Releasing additional local resources (file handles, hardware locks).
-            - Implementing a different "commit" logic for the sequence.
+            - Implementing a different "commit" logic for the session.
             - Sending specialized notification signals to the server upon exit.
 
         Args:
@@ -145,7 +171,7 @@ class BaseSequenceWriter(ABC):
             except Exception as e:
                 # An exception occurred during cleanup or finalization
                 self._logger.error(
-                    f"Exception during __exit__ for sequence '{self._name}': '{e}'"
+                    f"Exception during __exit__ for session {self._uuid}, sequence '{self._name}': '{e}'"
                 )
                 # notify error and go on
                 out_exc = e
@@ -155,24 +181,24 @@ class BaseSequenceWriter(ABC):
         if error_in_block:  # either in with block or after close operations
             # Exception occurred: Clean up and handle policy
             self._logger.error(
-                f"Exception caught in SequenceWriter block, sequence  '{self._name}'. Inner err: '{out_exc}'"
+                f"Exception caught in BaseSessionWriter block for session {self._uuid}, sequence  '{self._name}'. Inner err: '{out_exc}'"
             )
             try:
                 self._close_topics(error=out_exc)
             except Exception as e:
                 self._logger.error(
-                    f"Exception while finalizing topics for sequence '{self._name}': '{e}'"
+                    f"Exception while finalizing topics for session {self._uuid}, sequence '{self._name}': '{e}'"
                 )
                 out_exc = e
 
-            # Apply the sequence-level error policy
+            # Apply the session-level error policy
             if self._config.on_error == OnErrorPolicy.Delete:
                 self._abort()
             else:
                 self._error_report(str(out_exc))
 
             # Last thing to do: DO NOT SET BEFORE!
-            self._sequence_status = SequenceStatus.Error
+            self._status = SessionStatus.Error
 
             if exc_type is None and out_exc is not None:
                 self._logger.error(
@@ -180,17 +206,17 @@ class BaseSequenceWriter(ABC):
                 )
 
     # --- Context Manager ---
-    def __enter__(self) -> "BaseSequenceWriter":
+    def __enter__(self) -> "BaseSessionWriter":
         """
-        Activates the sequence writer and initializes server-side resources.
+        Activates the session writer and initializes server-side resources.
 
         This method executes the specific lifecycle hook defined by the subclass
-        (via `_on_sequence_open`) to prepare the server for data intake. Once
+        (via `_on_context_enter`) to prepare the server for data intake. Once
         initialized, the writer enters a 'Pending' state, enabling the creation
         of topics and parallel data streaming.
 
         Returns:
-            _BaseSequenceWriter: The initialized and ready-to-write instance.
+            BaseSessionWriter: The initialized and ready-to-write instance.
         """
         self._on_context_enter()
         return self
@@ -202,9 +228,9 @@ class BaseSequenceWriter(ABC):
         exc_tb: Optional[Any],
     ) -> None:
         """
-        Finalizes the sequence.
+        Finalizes the session.
 
-        - If successful: Finalizes all topics and the sequence itself.
+        - If successful: Finalizes all topics and the session itself.
         - If error: Finalizes topics in error mode and either Aborts (Delete)
           or Reports the error based on `WriterConfig.on_error`.
         """
@@ -217,18 +243,18 @@ class BaseSequenceWriter(ABC):
     def __del__(self):
         """Destructor check to warn if the writer was left pending."""
         name = getattr(self, "_name", "__not_initialized__")
-        status = getattr(self, "_sequence_status", SequenceStatus.Null)
+        status = getattr(self, "_status", SessionStatus.Null)
 
-        if status == SequenceStatus.Pending:
+        if status == SessionStatus.Pending:
             self._logger.warning(
-                f"SequenceWriter '{name}' destroyed without calling close(). "
+                f"BaseSessionWriter' for sequence '{name}' destroyed without calling close(). "
                 "Resources may not have been released properly."
             )
 
     def _check_entered(self):
         """Ensures methods are only called inside a `with` block."""
         if not self._entered:
-            raise RuntimeError("SequenceWriter must be used within a 'with' block.")
+            raise RuntimeError("BaseSessionWriter must be used within a 'with' block.")
 
     # --- Public API ---
     def topic_create(
@@ -238,7 +264,7 @@ class BaseSequenceWriter(ABC):
         ontology_type: Type[Serializable],
     ) -> Optional[TopicWriter]:
         """
-        Creates a new topic within the active sequence.
+        Creates a new topic within the active session.
 
         This method performs a "Multi-Lane" resource assignment, granting the new
         [`TopicWriter`][mosaicolabs.handlers.TopicWriter], its own connection from the pool
@@ -274,19 +300,19 @@ class BaseSequenceWriter(ABC):
                 client=self._control_client,
                 action=ACTION,
                 payload={
-                    "sequence_key": self._key,
-                    "name": pack_topic_resource_name(self._name, topic_name),
+                    "session_uuid": self._uuid,
+                    "locator": pack_topic_resource_name(self._name, topic_name),
                     "serialization_format": ontology_type.__serialization_format__.value,
                     "ontology_tag": ontology_type.__ontology_tag__,
                     "user_metadata": metadata,
                 },
-                expected_type=_DoActionResponseKey,
+                expected_type=_DoActionResponseUUID,
             )
         except Exception as e:
             self._logger.error(
                 str(
                     _make_exception(
-                        f"Failed to execute '{ACTION.value}' action for sequence '{self._name}', topic '{topic_name}'.",
+                        f"Failed to execute '{ACTION.value}' action for session {self._uuid}, sequence '{self._name}', topic '{topic_name}'.",
                         e,
                     )
                 )
@@ -312,7 +338,7 @@ class BaseSequenceWriter(ABC):
             writer = TopicWriter._create(
                 sequence_name=self._name,
                 topic_name=topic_name,
-                topic_key=act_resp.key,
+                topic_uuid=act_resp.uuid,
                 client=data_client,
                 executor=executor,
                 ontology_type=ontology_type,
@@ -324,7 +350,7 @@ class BaseSequenceWriter(ABC):
             self._logger.error(
                 str(
                     _make_exception(
-                        f"Failed to initialize 'TopicWriter' for sequence '{self._name}', topic '{topic_name}'. Topic will be deleted from db.",
+                        f"Failed to initialize 'TopicWriter' for session {self._uuid}, sequence '{self._name}', topic '{topic_name}'. Topic will be deleted from db.",
                         e,
                     )
                 )
@@ -333,14 +359,16 @@ class BaseSequenceWriter(ABC):
                 _do_action(
                     client=self._control_client,
                     action=FlightAction.TOPIC_DELETE,
-                    payload={"name": pack_topic_resource_name(self._name, topic_name)},
+                    payload={
+                        "locator": pack_topic_resource_name(self._name, topic_name)
+                    },
                     expected_type=None,
                 )
             except Exception:
                 self._logger.error(
                     str(
                         _make_exception(
-                            f"Failed to send TOPIC_DELETE do_action for sequence '{self._name}', topic '{topic_name}'.",
+                            f"Failed to send TOPIC_DELETE do_action for session {self._uuid}, sequence '{self._name}', topic '{topic_name}'.",
                             e,
                         )
                     )
@@ -350,20 +378,20 @@ class BaseSequenceWriter(ABC):
         return writer
 
     @property
-    def sequence_status(self) -> SequenceStatus:
+    def session_status(self) -> SessionStatus:
         """
-        Returns the current operational status of the sequence.
+        Returns the current operational status of the session.
 
         Returns:
-            The [`SequenceStatus`][mosaicolabs.enum.SequenceStatus].
+            The [`SessionStatus`][mosaicolabs.enum.SessionStatus].
         """
-        return self._sequence_status
+        return self._status
 
     def _finalize(self):
         """
-        Finalizes the sequence on the server.
+        Finalizes the session on the server.
 
-        Sends the `SEQUENCE_FINALIZE` signal, which instructs the server to mark all
+        Sends the `SESSION_FINALIZE` signal, which instructs the server to mark all
         ingested data as immutable.
 
         Note: Automatic Finalization
@@ -374,25 +402,26 @@ class BaseSequenceWriter(ABC):
             Exception: If the server-side finalization fails.
         """
         self._check_entered()
-        if self._sequence_status == SequenceStatus.Pending:
+        if self._status == SessionStatus.Pending:
             try:
                 _do_action(
                     client=self._control_client,
-                    action=FlightAction.SEQUENCE_FINALIZE,
+                    action=FlightAction.SESSION_FINALIZE,
                     payload={
-                        "name": self._name,
-                        "key": self._key,
+                        "session_uuid": self._uuid,
                     },
                     expected_type=None,
                 )
-                self._sequence_status = SequenceStatus.Finalized
-                self._logger.info(f"Sequence '{self._name}' finalized successfully.")
+                self._status = SessionStatus.Finalized
+                self._logger.info(
+                    f"Session {self._uuid}, sequence '{self._name}' finalized successfully."
+                )
                 return
             except Exception as e:
                 # _do_action raised: re-raise
-                self._sequence_status = SequenceStatus.Error  # Sets status to Error
+                self._status = SessionStatus.Error  # Sets status to Error
                 raise _make_exception(
-                    f"Error sending 'finalize' action for sequence '{self._name}'. Server state may be inconsistent.",
+                    f"Error sending 'finalize' action for session {self._uuid}, sequence '{self._name}'. Server state may be inconsistent.",
                     e,
                 )
 
@@ -490,42 +519,51 @@ class BaseSequenceWriter(ABC):
     # --- Private lifetime management methods ---
     def _error_report(self, err: str):
         """Internal: Sends error report to server."""
-        if self._sequence_status == SequenceStatus.Pending:
+        if self._status == SessionStatus.Pending:
+            err_msg = (
+                f"Exception caught in BaseSessionWriter block for session "
+                f"{self._uuid}, sequence  '{self._name}'.\nInner err: '{err}'"
+            )
             try:
                 _do_action(
                     client=self._control_client,
                     action=FlightAction.SEQUENCE_NOTIFY_CREATE,
                     payload={
-                        "name": self._name,
+                        "locator": self._name,
                         "notify_type": "error",
-                        "msg": str(err),
+                        "msg": err_msg,
                     },
                     expected_type=None,
                 )
-                self._logger.info(f"Sequence '{self._name}' reported error.")
+                self._logger.info(
+                    f"Session {self._uuid}, sequence '{self._name}' reported error: '{err_msg}'"
+                )
             except Exception as e:
                 raise _make_exception(
-                    f"Error sending 'sequence_report_error' for '{self._name}'.", e
+                    f"Error sending 'sequence_report_error' for session '{self._uuid}', sequence '{self._name}'.",
+                    e,
                 )
 
     def _abort(self):
         """Internal: Sends Abort command (Delete policy)."""
-        if self._sequence_status != SequenceStatus.Finalized:
+        if self._status != SessionStatus.Finalized:
             try:
                 _do_action(
                     client=self._control_client,
-                    action=FlightAction.SEQUENCE_ABORT,
+                    action=FlightAction.SESSION_ABORT,
                     payload={
-                        "name": self._name,
-                        "key": self._key,
+                        "session_uuid": self._uuid,
                     },
                     expected_type=None,
                 )
-                self._logger.info(f"Sequence '{self._name}' aborted successfully.")
-                self._sequence_status = SequenceStatus.Error
+                self._logger.info(
+                    f"Session {self._uuid}, sequence '{self._name}' aborted successfully."
+                )
+                self._status = SessionStatus.Error
             except Exception as e:
                 raise _make_exception(
-                    f"Error sending 'abort' for sequence '{self._name}'.", e
+                    f"Error sending 'abort' for session {self._uuid}, sequence '{self._name}'.",
+                    e,
                 )
 
     def _close_topics(self, error: Optional[BaseException] = None) -> None:
@@ -533,14 +571,16 @@ class BaseSequenceWriter(ABC):
         Iterates over all TopicWriters and finalizes them.
         """
         self._logger.info(
-            f"Freeing TopicWriters {'WITH ERROR' if error is not None else ''} for sequence '{self._name}'."
+            f"Freeing TopicWriters {'WITH ERROR' if error is not None else ''} for session {self._uuid}, sequence '{self._name}'."
         )
         errors = []
         for topic_name, twriter in self._topic_writers.items():
             try:
                 twriter._finalize(error=error)
             except Exception as e:
-                self._logger.error(f"Failed to finalize topic '{topic_name}': '{e}'")
+                self._logger.error(
+                    f"Failed to finalize topic '{topic_name}' for session {self._uuid}, sequence '{self._name}'.: '{e}'"
+                )
                 errors.append(e)
 
         # Delete all TopicWriter instances, nothing can be done from here on
@@ -550,6 +590,6 @@ class BaseSequenceWriter(ABC):
             first_error = errors[0]
             # Raise for the `_on_context_exit` to handle the error
             raise _make_exception(
-                f"Errors occurred closing topics: {len(errors)} topic(s) failed to finalize.",
+                f"Errors occurred closing topics for session {self._uuid}, sequence '{self._name}': {len(errors)} topic(s) failed to finalize.",
                 first_error,
             )
