@@ -24,7 +24,7 @@ from .handlers import (
     TopicHandler as TopicHandler,
     TopicWriter as TopicWriter,
     TopicDataStreamer as TopicDataStreamer,
-    SystemInfo as SystemInfo,
+    SequenceUpdater as SequenceUpdater,
 )
 
 # --- Types ---
@@ -52,6 +52,8 @@ from .models.sensors import (
     Magnetometer as Magnetometer,
     RobotJoint as RobotJoint,
     Pressure as Pressure,
+    Temperature as Temperature,
+    Range as Range,
 )
 
 # --- Base Types ---
@@ -132,7 +134,6 @@ from .logging_config import (
 )
 
 
-
 __all__ = [
     # Client
     "MosaicoClient",
@@ -143,10 +144,10 @@ __all__ = [
     "SequenceHandler",
     "SequenceWriter",
     "SequenceDataStreamer",
+    "SequenceUpdater",
     "TopicHandler",
     "TopicWriter",
     "TopicDataStreamer",
-    "SystemInfo",
     # Core Models
     "BaseModel",
     "Serializable",
@@ -166,6 +167,8 @@ __all__ = [
     "Magnetometer",
     "RobotJoint",
     "Pressure",
+    "Temperature",
+    "Range",
     # Base Types
     "Boolean",
     "Integer8",
