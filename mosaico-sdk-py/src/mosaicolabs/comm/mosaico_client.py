@@ -27,6 +27,7 @@ from .do_action import (
     _DoActionResponseAPIKeyRevoke,
     _DoActionResponseAPIKeyStatus,
 )
+from ..platform.api_key import APIKeyStatus
 from ..logging_config import get_logger
 from ..enum import FlightAction, OnErrorPolicy
 from ..handlers.config import WriterConfig
@@ -772,7 +773,7 @@ class MosaicoClient:
         permissions: list[str], 
         expires_at_ns: int | None = None, 
         description: str | None = None
-    ) -> _DoActionResponseAPIKeyCreate:
+    ) -> str | None:
         """
         Creates a new API key with the specified permissions.
 
@@ -785,25 +786,37 @@ class MosaicoClient:
             description (str | None): Optional description for the key.
 
         Returns:
-            _DoActionResponseAPIKeyCreate: Contains the generated API key token.
+            str: The generated API key token or None.
         """
         payload: dict[str, Any] = {"permissions": permissions}
         if expires_at_ns is not None:
             payload["expires_at_ns"] = expires_at_ns
         if description is not None:
             payload["description"] = description
+        ACTION = FlightAction.API_KEY_CREATE
 
-        return _do_action(
-            client=self._control_client,
-            action=FlightAction.API_KEY_CREATE,
-            payload=payload,
-            expected_type=_DoActionResponseAPIKeyCreate,
-        )
+        try:
+            act_resp = _do_action(
+                client=self._control_client,
+                action=ACTION,
+                payload=payload,
+                expected_type=_DoActionResponseAPIKeyCreate,
+            )
+
+            if act_resp is None:
+                logger.error(f"Action '{ACTION}' returned no response.")
+                return None
+
+            return act_resp.api_key_token
+
+        except Exception as e:
+            logger.error(f"API key creation failed with error: '{e}'")
+            return None
 
     def api_key_status(
         self, 
         api_key_fingerprint: str
-    ) -> _DoActionResponseAPIKeyStatus:
+    ) -> APIKeyStatus | None:
         """
         Retrieves the status and metadata of an API key.
 
@@ -811,19 +824,37 @@ class MosaicoClient:
             api_key_fingerprint (str): The fingerprint of the API key to query.
 
         Returns:
-            _DoActionResponseAPIKeyStatus: Contains creation time, expiration, description, and fingerprint.
+            APIKeyStatus: An object containing the API key's status information, or None if the query fails.
         """
-        return _do_action(
-            client=self._control_client,
-            action=FlightAction.API_KEY_STATUS,
-            payload={"api_key_fingerprint": api_key_fingerprint},
-            expected_type=_DoActionResponseAPIKeyStatus,
-        )
+        ACTION = FlightAction.API_KEY_STATUS
+
+        try:
+            act_resp = _do_action(
+                client=self._control_client,
+                action=ACTION,
+                payload={"api_key_fingerprint": api_key_fingerprint},
+                expected_type=_DoActionResponseAPIKeyStatus,
+            )
+
+            if act_resp is None:
+                logger.error(f"Action '{ACTION}' returned no response.")
+                return None
+
+            return APIKeyStatus(
+                api_key_fingerprint=act_resp.api_key_fingerprint,
+                created_at_ns=act_resp.created_at_ns,
+                expires_at_ns=act_resp.expires_at_ns,
+                description=act_resp.description,
+            )
+
+        except Exception as e:
+            logger.error(f"API key status query failed with error: '{e}'")
+            return None
 
     def api_key_revoke(
         self, 
         api_key_fingerprint: str
-    ) -> _DoActionResponseAPIKeyRevoke:
+    ) -> None:
         """
         Revokes an API key by its fingerprint.
 
@@ -831,14 +862,22 @@ class MosaicoClient:
             api_key_fingerprint (str): The fingerprint of the API key to revoke.
 
         Returns:
-            _DoActionResponseAPIKeyRevoke: Indicates successful revocation (server returns None).
+            None.
         """
-        return _do_action(
-            client=self._control_client,
-            action=FlightAction.API_KEY_REVOKE,
-            payload={"api_key_fingerprint": api_key_fingerprint},
-            expected_type=_DoActionResponseAPIKeyRevoke,
-        )
+        ACTION = FlightAction.API_KEY_REVOKE
+        try:
+            act_resp = _do_action(
+                client=self._control_client,
+                action=ACTION,
+                payload={"api_key_fingerprint": api_key_fingerprint},
+                expected_type=_DoActionResponseAPIKeyRevoke,
+            )
+
+            if act_resp is None:
+                logger.error(f"Action '{ACTION}' returned no response.")
+
+        except Exception as e:
+            logger.error(f"API key revoke failed with error: '{e}'")
 
     def close(self):
         """

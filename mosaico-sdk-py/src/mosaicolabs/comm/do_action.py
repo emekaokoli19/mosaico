@@ -287,16 +287,16 @@ class _DoActionResponseAPIKeyStatus(_DoActionResponse):
     actions: ClassVar[list[FlightAction]] = [FlightAction.API_KEY_STATUS]
     api_key_fingerprint: str
     created_at_ns: int
-    expires_at_ns: int
-    description: str
+    expires_at_ns: int | None
+    description: str | None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "_DoActionResponseAPIKeyStatus":
         return cls(
             api_key_fingerprint=data["api_key_fingerprint"],
             created_at_ns=data["created_at_ns"],
-            expires_at_ns=data["expires_at_ns"],
-            description=data["description"],
+            expires_at_ns=data.get("expires_at_ns"),
+            description=data.get("description"),
         )
 
 
