@@ -1,12 +1,13 @@
-from mosaicolabs.comm import MosaicoClient
-from mosaicolabs.models import Time
-from mosaicolabs.models.platform import Sequence
-from mosaicolabs.models.query import QuerySequence
 import pytest
+
+from mosaicolabs.comm import MosaicoClient
+from mosaicolabs.models.query import QuerySequence
+from mosaicolabs.types import Time
 from testing.integration.config import (
     UPLOADED_SEQUENCE_NAME,
 )
-from .helpers import topic_to_metadata_dict, _validate_returned_topic_name
+
+from .helpers import _validate_returned_topic_name, topic_to_metadata_dict
 
 
 def test_query_sequence_by_name(
@@ -91,7 +92,7 @@ def test_query_sequence_metadata(
         .with_name(
             UPLOADED_SEQUENCE_NAME
         )  # limit to this sequence for avoiding other sequences created by other tests (ensure controllability)
-        .with_expression(Sequence.Q.user_metadata["status"].eq("processed"))
+        .with_user_metadata("status", eq="processed")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -109,8 +110,8 @@ def test_query_sequence_metadata(
     # Test with multiple conditions
     query_resp = _client.query(
         QuerySequence()
-        .with_expression(Sequence.Q.user_metadata["status"].eq("processed"))
-        .with_expression(Sequence.Q.user_metadata["environment.weather"].eq("sunny"))
+        .with_user_metadata("status", eq="processed")
+        .with_user_metadata("environment.weather", eq="sunny")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -127,11 +128,9 @@ def test_query_sequence_metadata(
     # Test with nested-fields condition
     query_resp = _client.query(
         QuerySequence()
-        .with_expression(Sequence.Q.user_metadata["location.city"].eq("Milan"))
-        .with_expression(Sequence.Q.user_metadata["location.facility"].eq("Downtown"))
-        .with_expression(
-            Sequence.Q.user_metadata["vehicle.software_stack.planning"].eq("plan-4.1.7")
-        )
+        .with_user_metadata("location.city", eq="Milan")
+        .with_user_metadata("location.facility", eq="Downtown")
+        .with_user_metadata("vehicle.software_stack.planning", eq="plan-4.1.7")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -207,12 +206,12 @@ def test_query_sequence_from_response_fail(
     qsequence = query_resp.to_query_sequence()
     # This must fail: field 'name' is already queried
     with pytest.raises(
-        NotImplementedError, match="Query builder already contains the key 'name'"
+        NotImplementedError, match="Query builder already contains the key 'locator'"
     ):
         query_resp = _client.query(qsequence.with_name(""))
     # This must fail: field 'name' is already queried
     with pytest.raises(
-        NotImplementedError, match="Query builder already contains the key 'name'"
+        NotImplementedError, match="Query builder already contains the key 'locator'"
     ):
         query_resp = _client.query(qsequence.with_name_match(""))
 

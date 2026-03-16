@@ -8,33 +8,37 @@ creating resource handlers (sequences, topics) and executing queries.
 """
 
 import os
-from typing import Any, Dict, List, Optional, Type
-from mosaicolabs.comm.notifications import Notified
+from typing import Any, Dict, List, Optional, Type, Union
+
 import pyarrow.flight as fl
 
+from mosaicolabs.comm.notifications import Notification
 from mosaicolabs.models.query import Query, QueryResponse
 from mosaicolabs.models.query.protocols import QueryableProtocol
 
+from ..enum import FlightAction, OnErrorPolicy, SessionLevelErrorPolicy
+from ..handlers import SequenceHandler, SequenceWriter, TopicHandler
+from ..handlers.config import SessionWriterConfig
 from ..helpers import pack_topic_resource_name
-from ..handlers import TopicHandler, SequenceHandler, SequenceWriter
-from .connection import _get_connection, _ConnectionStatus, _ConnectionPool
-from .executor_pool import _ExecutorPool
+from ..logging_config import get_logger
+from ..platform.api_key import APIKeyStatus
+from .connection import (
+    DEFAULT_MAX_BATCH_BYTES,
+    DEFAULT_MAX_BATCH_SIZE_RECORDS,
+    _ConnectionPool,
+    _ConnectionStatus,
+    _get_connection,
+)
 from .do_action import (
     _do_action,
+    _DoActionNotificationList,
     _DoActionQueryResponse,
-    _DoActionNotifyList,
     _DoActionResponseAPIKeyCreate,
     _DoActionResponseAPIKeyRevoke,
     _DoActionResponseAPIKeyStatus,
 )
-from ..platform.api_key import APIKeyStatus
-from ..logging_config import get_logger
-from ..enum import FlightAction, OnErrorPolicy
-from ..handlers.config import WriterConfig
-from .connection import (
-    DEFAULT_MAX_BATCH_BYTES,
-    DEFAULT_MAX_BATCH_SIZE_RECORDS,
-)
+from .executor_pool import _ExecutorPool
+from .middlewares import MosaicoAuthMiddlewareFactory
 
 # Set the hierarchical logger
 logger = get_logger(__name__)
@@ -55,7 +59,11 @@ class MosaicoClient:
         ```python
         from mosaicolabs import MosaicoClient
 
-        with MosaicoClient.connect("localhost", 6726) as client:
+        with MosaicoClient.connect(
+            "localhost",
+            6726,
+            api_key="msco_s3l8gcdwuadege3pkhou0k0n2t5omfij_f9010b9e",
+        ) as client:
             sequences = client.list_sequences()
             print(f"Available data: {sequences}")
         ```
@@ -64,6 +72,8 @@ class MosaicoClient:
     # --- Private Sentinel Value ---
     # Used to ensure the constructor is only called via the `connect()` factory.
     _CONNECT_SENTINEL = object()
+    _MOSAICO_TLS_CERT_ENV_VAR: str = "MOSAICO_TLS_CERT_FILE"
+    _MOSAICO_AUTH_API_KEY: str = "MOSAICO_API_KEY"
 
     def __init__(
         self,
@@ -75,6 +85,8 @@ class MosaicoClient:
         connection_pool: Optional[_ConnectionPool],
         executor_pool: Optional[_ExecutorPool],
         sentinel: object,
+        tls_cert: Optional[bytes],
+        middlewares: dict[str, fl.ClientMiddlewareFactory],
     ):
         """
         **Internal Constructor** (do not call this directly): The `MosaicoClient` enforces a strict
@@ -95,6 +107,8 @@ class MosaicoClient:
             connection_pool: Internal pool for data connections.
             executor_pool: Internal pool for async I/O.
             sentinel: Private object used to verify factory-based instantiation.
+            tls_cert: The TLS certificate.
+            middlewares: The middlewares to be used for the connection.
         """
         if sentinel is not MosaicoClient._CONNECT_SENTINEL:
             raise RuntimeError(
@@ -115,6 +129,10 @@ class MosaicoClient:
         """The pool of Flight clients used for parallel data writing."""
         self._executor_pool: Optional[_ExecutorPool] = executor_pool
         """The pool of thread executors used for offloading serialization and I/O."""
+        self._tls_cert: Optional[bytes] = tls_cert
+        """The path to the TLS certificate file."""
+        self._middlewares: dict[str, fl.ClientMiddlewareFactory] = middlewares
+        """The middlewares to be used for the connection."""
 
         # Initialize caches
         self._sequence_handlers_cache: Dict[str, SequenceHandler] = {}
@@ -124,6 +142,10 @@ class MosaicoClient:
 
     def _init_pools(self):
         """Initialize Connection and Executor pools"""
+        self._get_connection_pool()
+        self._get_executor_pool()
+
+    def _get_connection_pool(self) -> _ConnectionPool:
         try:
             # Attempt to create the connection pool. We use os.cpu_count()
             # as a heuristic for the optimal pool size.
@@ -133,16 +155,26 @@ class MosaicoClient:
                     port=self._port,
                     pool_size=os.cpu_count(),
                     timeout=self._timeout,
+                    tls_cert=self._tls_cert,
+                    middlewares=self._middlewares,
                 )
+
+            return self._connection_pool
+
         except Exception as e:
             raise ConnectionError(
                 f"Exception while initializing Connection pool.\nInner err. '{e}'"
             )
 
+    def _get_executor_pool(self) -> _ExecutorPool:
         try:
-            # Attempt to create the executor pool.
+            # Attempt to create the executor pool. We use os.cpu_count()
+            # as a heuristic for the optimal pool size.
             if self._executor_pool is None:
                 self._executor_pool = _ExecutorPool(pool_size=os.cpu_count())
+
+            return self._executor_pool
+
         except Exception as e:
             raise Exception(
                 f"Exception while initializing Executor pool.\nInner err. '{e}'"
@@ -154,6 +186,8 @@ class MosaicoClient:
         host: str,
         port: int,
         timeout: int = 5,
+        tls_cert_path: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> "MosaicoClient":
         """
         The primary entry point to the Mosaico Data Platform.
@@ -174,6 +208,8 @@ class MosaicoClient:
             port (int): The server port (e.g., 6726).
             timeout (int): Maximum time in seconds to wait for a connection response.
                 Defaults to 5.
+            tls_cert_path (Optional[str]): Path to the TLS certificate file. Defaults to None.
+            api_key (Optional[str]): The API key for authentication. Defaults to None.
 
         Returns:
             MosaicoClient: An initialized and connected client ready for operations.
@@ -187,7 +223,11 @@ class MosaicoClient:
             from mosaicolabs import MosaicoClient
 
             # Establish a connection to the Mosaico Data Platform
-            with MosaicoClient.connect("localhost", 6726) as client:
+            with MosaicoClient.connect(
+                "localhost",
+                6726,
+                api_key="msco_vy9lqa7u4lr7w3vimhz5t8bvvc0xbmk2_9c94a86",
+            ) as client:
                 # Perform operations using the client
                 pass
             ```
@@ -195,9 +235,20 @@ class MosaicoClient:
 
         # Establish the Control Connection
         logger.debug(f"Opening a connection '{host}:{port}'")
+
+        resolved_tls_cert = cls._resolve_tls_cert_path(tls_cert_path)
+
+        middlewares = {}
+        if api_key:
+            middlewares["mosaico_auth"] = MosaicoAuthMiddlewareFactory(api_key=api_key)
+
         try:
             control_client: fl.FlightClient = _get_connection(
-                host=host, port=port, timeout=timeout
+                host=host,
+                port=port,
+                timeout=timeout,
+                tls_cert=resolved_tls_cert,
+                middlewares=middlewares,
             )
         except Exception as e:
             raise ConnectionError(
@@ -213,6 +264,51 @@ class MosaicoClient:
             connection_pool=None,
             executor_pool=None,
             sentinel=cls._CONNECT_SENTINEL,
+            tls_cert=resolved_tls_cert,
+            middlewares=middlewares,
+        )
+
+    @classmethod
+    def from_env(
+        cls,
+        host: str,
+        port: int,
+        timeout: int = 5,
+    ) -> "MosaicoClient":
+        """
+        Creates a MosaicoClient instance by resolving configuration from environment variables.
+
+        This method acts as a smart constructor that automatically discovers system
+        settings. It currently focuses on security configurations, specifically
+        resolving TLS settings and Auth API-Key if the required environment variables are present.
+
+        As the SDK evolves, this method will be expanded to automatically detect
+        additional parameters from the environment.
+
+        Args:
+            host (str): The server hostname or IP address.
+            port (int): The port number of the Mosaico service.
+            timeout (int): Maximum time in seconds to wait for a connection response.
+                Defaults to 5.
+
+        Returns:
+            MosaicoClient: A client instance pre-configured with discovered settings.
+            If no specific environment variables are found, it returns a
+            client with default settings.
+
+        Example:
+            ``` python
+                # If MOSAICOD_TLS_CERT_FILE is set in the shell:
+                client = MosaicoClient.from_env("localhost", 6276)
+            ```
+        """
+
+        return cls.connect(
+            host=host,
+            port=port,
+            timeout=timeout,
+            tls_cert_path=os.environ.get(MosaicoClient._MOSAICO_TLS_CERT_ENV_VAR),
+            api_key=os.environ.get(MosaicoClient._MOSAICO_AUTH_API_KEY),
         )
 
     # --- Context Manager Protocol ---
@@ -255,6 +351,38 @@ class MosaicoClient:
         # remove from cache
         del self._topic_handlers_cache[topic_resource_name]
 
+    @staticmethod
+    def _resolve_tls_cert_path(tls_cert_path: Optional[str]) -> Optional[bytes]:
+        """
+        Resolves the TLS certificate path.
+
+        Args:
+            tls_cert_path (Optional[str]): Path to the TLS certificate file.
+
+        Returns:
+            Optional[bytes]: The contents of the TLS certificate file, or None if the path is None.
+        """
+
+        logger.debug(f"Resolving Mosaico tls certificate path {tls_cert_path}")
+
+        if tls_cert_path is None:
+            return None
+
+        if not tls_cert_path:
+            raise ValueError("tls_cert_path cannot be empty")
+
+        try:
+            with open(tls_cert_path, "rb") as cert_file:
+                return cert_file.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(
+                f"tls certificate path '{tls_cert_path}' does not exist"
+            )
+        except OSError as e:
+            raise ValueError(
+                f"Failed to read tls certificate from {tls_cert_path}: {e}"
+            )
+
     # --- Handler Factory Methods ---
 
     def sequence_handler(self, sequence_name: str) -> Optional[SequenceHandler]:
@@ -293,6 +421,8 @@ class MosaicoClient:
             sh = SequenceHandler._connect(
                 sequence_name=sequence_name,
                 client=self._control_client,
+                connection_pool_allocator=self._get_connection_pool,
+                executor_pool_allocator=self._get_executor_pool,
             )
             if not sh:
                 return None
@@ -356,7 +486,9 @@ class MosaicoClient:
         self,
         sequence_name: str,
         metadata: dict[str, Any],
-        on_error: OnErrorPolicy = OnErrorPolicy.Delete,
+        on_error: Union[
+            SessionLevelErrorPolicy, OnErrorPolicy
+        ] = SessionLevelErrorPolicy.Report,
         max_batch_size_bytes: Optional[int] = None,
         max_batch_size_records: Optional[int] = None,
     ) -> SequenceWriter:
@@ -370,7 +502,14 @@ class MosaicoClient:
         Args:
             sequence_name (str): Unique name for the sequence.
             metadata (dict[str, Any]): User-defined metadata to attach.
-            on_error (OnErrorPolicy): Behavior on write failure. Defaults to `Delete`.
+            on_error (SessionLevelErrorPolicy | OnErrorPolicy): Behavior on write failure. Defaults to
+                [`SessionLevelErrorPolicy.Report`][mosaicolabs.enum.SessionLevelErrorPolicy.Report].
+
+                Deprecated:
+                    [`OnErrorPolicy`][mosaicolabs.enum.OnErrorPolicy] is deprecated since v0.3.0; use
+                    [`SessionLevelErrorPolicy`][mosaicolabs.enum.SessionLevelErrorPolicy] instead.
+                    It will be removed in v0.4.0.
+
             max_batch_size_bytes (Optional[int]): Max bytes per Arrow batch.
             max_batch_size_records (Optional[int]): Max records per Arrow batch.
 
@@ -383,7 +522,7 @@ class MosaicoClient:
 
         Example:
             ```python
-            from mosaicolabs import MosaicoClient, OnErrorPolicy
+            from mosaicolabs import MosaicoClient, SessionLevelErrorPolicy
 
             # Open the connection with the Mosaico Client
             with MosaicoClient.connect("localhost", 6726) as client:
@@ -407,7 +546,7 @@ class MosaicoClient:
                             },
                         },
                     }
-                    on_error = OnErrorPolicy.Delete # Default
+                    on_error = SessionLevelErrorPolicy.Delete
                     ) as seq_writer:
                         # Start creating topics and pushing data...
                         # (1)!
@@ -432,13 +571,16 @@ class MosaicoClient:
         # Init connection and executor pools
         self._init_pools()
 
+        if isinstance(on_error, OnErrorPolicy):
+            on_error = SessionLevelErrorPolicy(on_error.value)
+
         return SequenceWriter(
             sequence_name=sequence_name,
             client=self._control_client,
             connection_pool=self._connection_pool,
             executor_pool=self._executor_pool,
             metadata=metadata,
-            config=WriterConfig(
+            config=SessionWriterConfig(
                 on_error=on_error,
                 max_batch_size_bytes=max_batch_size_bytes,
                 max_batch_size_records=max_batch_size_records,
@@ -453,11 +595,6 @@ class MosaicoClient:
         resources, including all topics and data chunks belonging to the sequence.
         Once executed, all storage occupied by the sequence is freed.
 
-        Important: Sequence Locking
-            This action can only be performed on **unlocked** sequences. If a sequence
-            is currently locked (e.g., for archival or safety reasons), the deletion
-            request will be rejected by the server.
-
         Args:
             sequence_name (str): The unique name of the sequence to remove.
         """
@@ -465,7 +602,7 @@ class MosaicoClient:
             _do_action(
                 client=self._control_client,
                 action=FlightAction.SEQUENCE_DELETE,
-                payload={"name": sequence_name},
+                payload={"locator": sequence_name},
                 expected_type=None,
             )
 
@@ -474,6 +611,30 @@ class MosaicoClient:
         except Exception as e:
             logger.error(
                 f"Server error (do_action) while asking for Sequence deletion, '{e}'"
+            )
+
+    def session_delete(self, session_uuid: str):
+        """
+        Permanently deletes a session and all its associated data from the server.
+
+        This operation is destructive and triggers a cascading deletion of all underlying
+        resources, including all topics and data chunks stored in the session.
+        Once executed, all storage occupied by the session is freed.
+
+        Args:
+            session_uuid (str): The unique identifier of the session to remove.
+        """
+        try:
+            _do_action(
+                client=self._control_client,
+                action=FlightAction.SESSION_DELETE,
+                payload={"session_uuid": session_uuid},
+                expected_type=None,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Server error (do_action) while asking for Session '{session_uuid}' deletion, '{e}'"
             )
 
     def list_sequences(self) -> List[str]:
@@ -500,7 +661,7 @@ class MosaicoClient:
             out_list.extend([p.decode("utf-8") for p in finfo.descriptor.path])
         return out_list
 
-    def list_sequence_notify(self, sequence_name: str) -> List[Notified]:
+    def list_sequence_notifications(self, sequence_name: str) -> List[Notification]:
         """
         Retrieves a list of all notifications available on the server for a specific sequence.
 
@@ -508,54 +669,54 @@ class MosaicoClient:
             sequence_name (str): The name of the sequence to list notifications for.
 
         Returns:
-            List[Notified]: The list of sequence notifications.
+            List[Notification]: The list of sequence notifications.
 
         Example:
             ```python
             from mosaicolabs import MosaicoClient
 
             with MosaicoClient.connect("localhost", 6726) as client:
-                sequence_notifications = client.list_sequence_notify("my_sequence")
-                for notify in sequence_notifications:
-                    print(f"Notification Type: {notify.notify_type}")
-                    print(f"Notification Message: {notify.message}")
-                    print(f"Notification Created: {notify.created_datetime}")
+                sequence_notifications = client.list_sequence_notifications("my_sequence")
+                for notification in sequence_notifications:
+                    print(f"Notification Type: {notification.type}")
+                    print(f"Notification Message: {notification.message}")
+                    print(f"Notification Created: {notification.created_datetime}")
             ```
         """
-        ACTION = FlightAction.SEQUENCE_NOTIFY_LIST
+        ACTION = FlightAction.SEQUENCE_NOTIFICATION_LIST
 
         try:
             act_resp = _do_action(
                 client=self._control_client,
                 action=ACTION,
-                payload={"name": sequence_name},
-                expected_type=_DoActionNotifyList,
+                payload={"locator": sequence_name},
+                expected_type=_DoActionNotificationList,
             )
 
             if act_resp is None:
                 logger.error(f"Action '{ACTION}' returned no response.")
                 return []
 
-            return act_resp.notifies
+            return act_resp.notifications
 
         except Exception as e:
             logger.error(f"Query returned an internal error: '{e}'")
             return []
 
-    def clear_sequence_notify(self, sequence_name: str):
+    def clear_sequence_notifications(self, sequence_name: str):
         """
         Clears the notifications for a specific sequence from the server.
 
         Args:
             sequence_name (str): The name of the sequence.
         """
-        ACTION = FlightAction.SEQUENCE_NOTIFY_PURGE
+        ACTION = FlightAction.SEQUENCE_NOTIFICATION_PURGE
 
         try:
             _do_action(
                 client=self._control_client,
                 action=ACTION,
-                payload={"name": sequence_name},
+                payload={"locator": sequence_name},
                 expected_type=None,
             )
 
@@ -563,7 +724,9 @@ class MosaicoClient:
             logger.error(f"Query returned an internal error: '{e}'")
             return []
 
-    def list_topic_notify(self, sequence_name: str, topic_name: str) -> List[Notified]:
+    def list_topic_notifications(
+        self, sequence_name: str, topic_name: str
+    ) -> List[Notification]:
         """
         Retrieves a list of all notifications available on the server for a specific topic
 
@@ -579,39 +742,39 @@ class MosaicoClient:
             from mosaicolabs import MosaicoClient
 
             with MosaicoClient.connect("localhost", 6726) as client:
-                topic_notifications = client.list_topic_notify("my_sequence", "my_topic")
-                for notify in topic_notifications:
-                    print(f"Notification Type: {notify.notify_type}")
-                    print(f"Notification Message: {notify.message}")
-                    print(f"Notification Created: {notify.created_datetime}")
+                topic_notifications = client.list_topic_notifications("my_sequence", "my_topic")
+                for notification in topic_notifications:
+                    print(f"Notification Type: {notification.type}")
+                    print(f"Notification Message: {notification.message}")
+                    print(f"Notification Created: {notification.created_datetime}")
             ```
         """
-        ACTION = FlightAction.TOPIC_NOTIFY_LIST
+        ACTION = FlightAction.TOPIC_NOTIFICATION_LIST
 
         try:
             act_resp = _do_action(
                 client=self._control_client,
                 action=ACTION,
                 payload={
-                    "name": pack_topic_resource_name(
+                    "locator": pack_topic_resource_name(
                         sequence_name=sequence_name,
                         topic_name=topic_name,
                     )
                 },
-                expected_type=_DoActionNotifyList,
+                expected_type=_DoActionNotificationList,
             )
 
             if act_resp is None:
                 logger.error(f"Action '{ACTION}' returned no response.")
                 return []
 
-            return act_resp.notifies
+            return act_resp.notifications
 
         except Exception as e:
             logger.error(f"Query returned an internal error: '{e}'")
             return []
 
-    def clear_topic_notify(self, sequence_name: str, topic_name: str):
+    def clear_topic_notifications(self, sequence_name: str, topic_name: str):
         """
         Clears the notifications for a specific topic from the server.
 
@@ -619,14 +782,14 @@ class MosaicoClient:
             sequence_name (str): The name of the sequence.
             topic_name (str): The name of the topic.
         """
-        ACTION = FlightAction.TOPIC_NOTIFY_PURGE
+        ACTION = FlightAction.TOPIC_NOTIFICATION_PURGE
 
         try:
             _do_action(
                 client=self._control_client,
                 action=ACTION,
                 payload={
-                    "name": pack_topic_resource_name(
+                    "locator": pack_topic_resource_name(
                         sequence_name=sequence_name,
                         topic_name=topic_name,
                     )
@@ -668,16 +831,12 @@ class MosaicoClient:
                 results = client.query(
                     # Append a filter for sequence metadata
                     QuerySequence()
-                    .with_expression(
-                        # Use query proxy for generating a _QuerySequenceExpression
-                        Sequence.Q.user_metadata["environment.visibility"].lt(50)
-                    )
+                    .with_user_metadata("environment.visibility", lt=50)
                     .with_name_match("test_drive"),
                     # Append a filter with deep time-series data discovery and measurement time windowing
                     QueryOntologyCatalog()
                     .with_expression(IMU.Q.acceleration.x.gt(5.0))
-                    .with_expression(IMU.Q.header.stamp.sec.gt(1700134567))
-                    .with_expression(IMU.Q.header.stamp.nanosec.between([123456, 789123])),
+                    .with_expression(IMU.Q.timestamp_ns.gt(1700134567))
                 )
                 # Inspect the results
                 if results is not None:
@@ -696,16 +855,12 @@ class MosaicoClient:
                 query = Query(
                     # Append a filter for sequence metadata
                     QuerySequence()
-                    .with_expression(
-                        # Use query proxy for generating a _QuerySequenceExpression
-                        Sequence.Q.user_metadata["environment.visibility"].lt(50)
-                    )
+                    .with_user_metadata("environment.visibility", lt=50)
                     .with_name_match("test_drive"),
                     # Append a filter with deep time-series data discovery and measurement time windowing
                     QueryOntologyCatalog()
                     .with_expression(IMU.Q.acceleration.x.gt(5.0))
-                    .with_expression(IMU.Q.header.stamp.sec.gt(1700134567))
-                    .with_expression(IMU.Q.header.stamp.nanosec.between([123456, 789123])),
+                    .with_expression(IMU.Q.timestamp_ns.gt(1700134567))
                 )
                 # Perform the server side query
                 results = client.query(query=query)
@@ -755,6 +910,32 @@ class MosaicoClient:
         except Exception as e:
             logger.error(f"Query returned an internal error: '{e}'")
             return None
+
+    def version(self) -> str:
+        """
+        Get the version of the Mosaico server.
+
+        Returns:
+            str: The version of the Mosaico server.
+        """
+        ACTION = FlightAction.VERSION
+        try:
+            act_resp = _do_action(
+                client=self._control_client,
+                action=ACTION,
+                payload={},
+                expected_type=None,
+            )
+
+            if act_resp is None:
+                logger.error(f"Action '{ACTION}' returned no response.")
+                return ""
+
+            return act_resp
+
+        except Exception as e:
+            logger.error(f"'Version' action returned an internal error: '{e}'")
+            return ""
 
     def clear_sequence_handlers_cache(self):
         """

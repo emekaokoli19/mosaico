@@ -6,13 +6,15 @@ Sequence's metadata. A Sequence is a logical grouping of multiple Topics.
 """
 
 from typing import Any, List
+
 from pydantic import PrivateAttr
 
+from mosaicolabs.comm.metadata import PlatformMetadata
+from mosaicolabs.comm.platform_resource_info import PlatformResourceInfo
 
+from ..query.expressions import _QuerySequenceExpression
 from ..query.generation.api import queryable
 from ..query.generation.pydantic_mapper import PydanticFieldMapper
-from ..query.expressions import _QuerySequenceExpression
-
 from .platform_base import PlatformBase
 
 
@@ -37,10 +39,9 @@ class Sequence(PlatformBase):
         instance.
 
     ### Querying with the **`.Q` Proxy**
-    The `user_metadata` field of this class is queryable when constructing a [`QuerySequence`][mosaicolabs.models.query.QuerySequence]
-    via the **`.Q` proxy**.
-    Check the documentation of the [`PlatformBase`][mosaicolabs.models.platform.platform_base.PlatformBase--querying-with-the-q-proxy] to construct a
-    a valid expression for the builders involving the `user_metadata` component.
+    Warning: Deprecated
+        Querying the sequence user-custom metadata via the `user_metadata` field of this class is deprecated.
+        Use the [`QuerySequence.with_user_metadata()`][mosaicolabs.models.query.builders.QuerySequence.with_user_metadata] builder instead.
 
     Example:
         ```python
@@ -50,19 +51,10 @@ class Sequence(PlatformBase):
             # Filter for a specific data value (using constructor)
             qresponse = client.query(
                 QuerySequence(
-                    Sequence.Q.user_metadata["project"].eq("Apollo"), # Access the keys using the [] operator
-                    Sequence.Q.user_metadata["vehicle.software_stack.planning"].match("plan-4."), # Navigate the nested dicts using the dot notation
+                    Sequence.Q.with_user_metadata("project", eq="Apollo"),
+                    Sequence.Q.with_user_metadata("vehicle.software_stack.planning", eq="plan-4.1.7"),
                 )
             )
-
-            # # The same query using `with_expression`
-            # qresponse = client.query(
-            #     QuerySequence()
-            #     .with_expression(Sequence.Q.user_metadata["project"].eq("Apollo"))
-            #     .with_expression(
-            #         Sequence.Q.user_metadata["vehicle.software_stack.planning"].match("plan-4.")
-            #     )
-            # )
 
             # Inspect the response
             if qresponse is not None:
@@ -76,38 +68,29 @@ class Sequence(PlatformBase):
     # --- Private Fields ---
     _topics: List[str] = PrivateAttr(default_factory=list)
 
-    # --- Factory Method ---
-    @classmethod
-    def _from_flight_info(
-        cls, name: str, metadata: Any, sys_info: Any, topics: List[str]
-    ) -> "Sequence":
+    def _init_from_flight_info(
+        self,
+        metadata: PlatformMetadata,
+        resrc_info: PlatformResourceInfo,
+        **kwargs: Any,
+    ) -> None:
         """
-        Internal factory method to construct a Sequence model from Flight protocol objects.
+        Overridden factory for Sequence entities.
 
         Args:
-            name: The unique name of the sequence.
-            metadata: Decoded sequence metadata containing user properties.
-            sys_info: System diagnostic information (size, lock status, dates).
-            topics: A list of string names for all topics contained in the sequence.
-
-        Returns:
-            A read-only `Sequence` model instance.
+            name: The name of the sequence.
+            metadata: UNUSED.
+            resrc_info: UNUSED.
+            **kwargs: Keyword arguments containing the following keys:
+                - `topics`: The list of topic names.
         """
-        instance = cls(
-            user_metadata=metadata.user_metadata,
-        )
+        # Check for topics in kwargs
+        topics = kwargs.get("topics")
+        if topics is None:
+            raise ValueError("Topics must be provided to initialize a Sequence.")
 
-        # Set private attributes explicitly
-        instance._init_base_private(
-            name=name,
-            created_datetime=sys_info.created_datetime,
-            is_locked=sys_info.is_locked,
-            total_size_bytes=sys_info.total_size_bytes,
-        )
-
-        # Set local private attributes
-        instance._topics = topics
-        return instance
+        # Populate Sequence-specific private attributes
+        self._topics = topics
 
     # --- Properties ---
     @property

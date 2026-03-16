@@ -1,0 +1,128 @@
+//! Flight DoAction endpoint implementation.
+//!
+//! This module implements the main dispatcher for Flight DoAction requests,
+//! delegating to specialized handler functions for each action category.
+
+use super::{
+    Context,
+    actions::{layer, misc, query as query_action, sequence, session, topic},
+};
+use crate::errors::ServerError;
+use mosaicod_core::types::auth::Permissions;
+use mosaicod_marshal::{ActionRequest, ActionResponse};
+
+/// Dispatches a Flight action request to the appropriate handler.
+///
+/// This function serves as the main entry point for all Flight DoAction requests,
+/// routing each action type to its specialized handler function.
+pub async fn do_action(
+    ctx: Context,
+    action: ActionRequest,
+    perm: &Permissions,
+) -> Result<ActionResponse, ServerError> {
+    if !has_permissions(&action, perm) {
+        return Err(ServerError::Unauthorized);
+    }
+
+    match action {
+        // ////////
+        // Sequence
+        ActionRequest::SequenceCreate(data) => {
+            let user_metadata = data.user_metadata()?;
+            sequence::create(&ctx, data.locator, user_metadata.as_str()).await
+        }
+        ActionRequest::SequenceDelete(data) => sequence::delete(&ctx, data.locator).await,
+        ActionRequest::SequenceNotificationCreate(data) => {
+            sequence::notification_create(&ctx, data.locator, data.notification_type, data.msg)
+                .await
+        }
+        ActionRequest::SequenceNotificationList(data) => {
+            sequence::notification_list(&ctx, data.locator).await
+        }
+        ActionRequest::SequenceNotificationPurge(data) => {
+            sequence::notification_purge(&ctx, data.locator).await
+        }
+        ActionRequest::SequenceSystemInfo(data) => sequence::system_info(&ctx, data.locator).await,
+
+        // ///////
+        // Session
+        ActionRequest::SessionCreate(data) => session::create(&ctx, data.locator).await,
+        ActionRequest::SessionFinalize(data) => session::finalize(&ctx, data.session_uuid).await,
+        ActionRequest::SessionAbort(data) => session::abort(&ctx, data.session_uuid).await,
+        ActionRequest::SessionDelete(data) => session::delete(&ctx, data.session_uuid).await,
+
+        // /////
+        // Topic
+        ActionRequest::TopicCreate(data) => {
+            let user_metadata = data.user_metadata()?;
+            topic::create(
+                &ctx,
+                data.locator,
+                data.session_uuid,
+                data.serialization_format.into(),
+                data.ontology_tag,
+                user_metadata.as_str(),
+            )
+            .await
+        }
+        ActionRequest::TopicDelete(data) => topic::delete(&ctx, data.locator).await,
+        ActionRequest::TopicNotificationCreate(data) => {
+            topic::notification_create(&ctx, data.locator, data.notification_type, data.msg).await
+        }
+        ActionRequest::TopicNotificationList(data) => {
+            topic::notification_list(&ctx, data.locator).await
+        }
+        ActionRequest::TopicNotificationPurge(data) => {
+            topic::notification_purge(&ctx, data.locator).await
+        }
+        ActionRequest::TopicSystemInfo(data) => topic::system_info(&ctx, data.locator).await,
+
+        // /////
+        // Layer
+        ActionRequest::LayerCreate(data) => layer::create(&ctx, data.name, data.description).await,
+        ActionRequest::LayerDelete(data) => layer::delete(&ctx, data.name).await,
+        ActionRequest::LayerUpdate(data) => {
+            layer::update(&ctx, data.prev_name, data.curr_name, data.curr_description).await
+        }
+        ActionRequest::LayerList(_) => layer::list(&ctx).await,
+
+        // /////
+        // Query
+        ActionRequest::Query(data) => query_action::execute(&ctx, data.query).await,
+
+        // /////
+        // Misc
+        ActionRequest::Version(_) => misc::version(),
+    }
+}
+
+/// Return true if the requested action matches the permissions, false otherwise
+fn has_permissions(action: &ActionRequest, perm: &Permissions) -> bool {
+    match action {
+        ActionRequest::SequenceCreate(_) => perm.is_write(),
+        ActionRequest::SequenceNotificationCreate(_) => perm.is_write(),
+        ActionRequest::TopicCreate(_) => perm.is_write(),
+        ActionRequest::TopicNotificationCreate(_) => perm.is_write(),
+        ActionRequest::SessionCreate(_) => perm.is_write(),
+        ActionRequest::SessionFinalize(_) => perm.is_write(),
+        ActionRequest::SessionAbort(_) => perm.is_write(),
+        ActionRequest::LayerCreate(_) => perm.is_write(),
+        ActionRequest::LayerUpdate(_) => perm.is_write(),
+
+        ActionRequest::SequenceDelete(_) => perm.is_delete(),
+        ActionRequest::SequenceNotificationPurge(_) => perm.is_delete(),
+        ActionRequest::TopicDelete(_) => perm.is_delete(),
+        ActionRequest::TopicNotificationPurge(_) => perm.is_delete(),
+        ActionRequest::SessionDelete(_) => perm.is_delete(),
+        ActionRequest::LayerDelete(_) => perm.is_delete(),
+
+        ActionRequest::Query(_) => perm.is_read(),
+        ActionRequest::SequenceNotificationList(_) => perm.is_read(),
+        ActionRequest::SequenceSystemInfo(_) => perm.is_read(),
+        ActionRequest::TopicNotificationList(_) => perm.is_read(),
+        ActionRequest::TopicSystemInfo(_) => perm.is_read(),
+        ActionRequest::LayerList(_) => perm.is_read(),
+
+        ActionRequest::Version(_) => true,
+    }
+}

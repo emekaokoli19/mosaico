@@ -1,17 +1,18 @@
-from mosaicolabs.comm import MosaicoClient
-from mosaicolabs.models import Time
-from mosaicolabs.models.platform import Topic
-from mosaicolabs.models.query import QuerySequence, QueryTopic
 import pytest
+
+from mosaicolabs.comm import MosaicoClient
+from mosaicolabs.models.query import QuerySequence, QueryTopic
+from mosaicolabs.types import Time
 from testing.integration.config import (
     UPLOADED_IMU_CAMERA_TOPIC,
     UPLOADED_IMU_FRONT_TOPIC,
     UPLOADED_SEQUENCE_NAME,
 )
+
 from .helpers import (
+    _validate_returned_topic_name,
     topic_to_metadata_dict,
     topic_to_ontology_class_dict,
-    _validate_returned_topic_name,
 )
 
 
@@ -183,9 +184,7 @@ def test_query_topic_metadata(
 ):
     # Trivial: query by topic name
     query_resp = _client.query(
-        QueryTopic().with_expression(
-            Topic.Q.user_metadata["serial_number"].eq("IMUF-9A31D72X")
-        )
+        QueryTopic().with_user_metadata("serial_number", eq="IMUF-9A31D72X")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -201,9 +200,7 @@ def test_query_topic_metadata(
 
     # Test with single condition
     query_resp = _client.query(
-        QueryTopic().with_expression(
-            Topic.Q.user_metadata["serial_number"].eq("IMUF-9A31D72X")
-        )
+        QueryTopic().with_user_metadata("serial_number", eq="IMUF-9A31D72X")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -220,8 +217,8 @@ def test_query_topic_metadata(
     # Test with multiple conditions
     query_resp = _client.query(
         QueryTopic()
-        .with_expression(Topic.Q.user_metadata["serial_number"].eq("IMUF-9A31D72X"))
-        .with_expression(Topic.Q.user_metadata["bias_stability"].gt(0.01))
+        .with_user_metadata("serial_number", eq="IMUF-9A31D72X")
+        .with_user_metadata("bias_stability", between=(0.005, 0.015))
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -237,7 +234,7 @@ def test_query_topic_metadata(
 
     # Test with multiple returned topic matches
     query_resp = _client.query(
-        QueryTopic().with_expression(Topic.Q.user_metadata["bias_stability"].geq(0.01))
+        QueryTopic().with_user_metadata("bias_stability", geq=0.01)
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -255,9 +252,7 @@ def test_query_topic_metadata(
 
     # Test with nested field
     query_resp = _client.query(
-        QueryTopic().with_expression(
-            Topic.Q.user_metadata["interface.type"].eq("Ethernet")
-        )
+        QueryTopic().with_user_metadata("interface.type", eq="Ethernet")
     )
     # We do expect a successful query
     assert query_resp is not None and not query_resp.is_empty()
@@ -328,7 +323,7 @@ def test_query_topic_from_response_fail(
     qtopic = query_resp.to_query_topic()
     # This must fail: field 'name' is already queried
     with pytest.raises(
-        NotImplementedError, match="Query builder already contains the key 'name'"
+        NotImplementedError, match="Query builder already contains the key 'locator'"
     ):
         query_resp = _client.query(qtopic.with_name_match(""))
 
