@@ -23,6 +23,9 @@ from .do_action import (
     _do_action,
     _DoActionQueryResponse,
     _DoActionNotifyList,
+    _DoActionResponseAPIKeyCreate,
+    _DoActionResponseAPIKeyRevoke,
+    _DoActionResponseAPIKeyStatus,
 )
 from ..logging_config import get_logger
 from ..enum import FlightAction, OnErrorPolicy
@@ -763,6 +766,79 @@ class MosaicoClient:
         Clears the internal cache of [`TopicHandler`][mosaicolabs.handlers.TopicHandler] objects.
         """
         self._topic_handlers_cache = {}
+
+    def api_key_create(
+        self, 
+        permissions: list[str], 
+        expires_at_ns: int | None = None, 
+        description: str | None = None
+    ) -> _DoActionResponseAPIKeyCreate:
+        """
+        Creates a new API key with the specified permissions.
+
+        Requires the client to have 'manage' permission. You can also optionally
+        set an expiration time and a description for the key.
+
+        Args:
+            permissions (list[str]): List of permissions for the key (e.g., "read", "write", "delete", "manage").
+            expires_at_ns (int | None): Optional expiration timestamp in nanoseconds.
+            description (str | None): Optional description for the key.
+
+        Returns:
+            _DoActionResponseAPIKeyCreate: Contains the generated API key token.
+        """
+        payload: dict[str, Any] = {"permissions": permissions}
+        if expires_at_ns is not None:
+            payload["expires_at_ns"] = expires_at_ns
+        if description is not None:
+            payload["description"] = description
+
+        return _do_action(
+            client=self._control_client,
+            action=FlightAction.API_KEY_CREATE,
+            payload=payload,
+            expected_type=_DoActionResponseAPIKeyCreate,
+        )
+
+    def api_key_status(
+        self, 
+        api_key_fingerprint: str
+    ) -> _DoActionResponseAPIKeyStatus:
+        """
+        Retrieves the status and metadata of an API key.
+
+        Args:
+            api_key_fingerprint (str): The fingerprint of the API key to query.
+
+        Returns:
+            _DoActionResponseAPIKeyStatus: Contains creation time, expiration, description, and fingerprint.
+        """
+        return _do_action(
+            client=self._control_client,
+            action=FlightAction.API_KEY_STATUS,
+            payload={"api_key_fingerprint": api_key_fingerprint},
+            expected_type=_DoActionResponseAPIKeyStatus,
+        )
+
+    def api_key_revoke(
+        self, 
+        api_key_fingerprint: str
+    ) -> _DoActionResponseAPIKeyRevoke:
+        """
+        Revokes an API key by its fingerprint.
+
+        Args:
+            api_key_fingerprint (str): The fingerprint of the API key to revoke.
+
+        Returns:
+            _DoActionResponseAPIKeyRevoke: Indicates successful revocation (server returns None).
+        """
+        return _do_action(
+            client=self._control_client,
+            action=FlightAction.API_KEY_REVOKE,
+            payload={"api_key_fingerprint": api_key_fingerprint},
+            expected_type=_DoActionResponseAPIKeyRevoke,
+        )
 
     def close(self):
         """

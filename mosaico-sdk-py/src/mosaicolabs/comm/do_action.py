@@ -253,3 +253,64 @@ class _DoActionNotifyList(_DoActionResponse):
         return _DoActionNotifyList(
             notifies=[Notified._from_dict(notify) for notify in nofifies]
         )
+
+
+@dataclass
+class _DoActionResponseAPIKeyCreate(_DoActionResponse):
+    """Response returned after creating a new API key.
+
+    This action generates a new API key token with the requested permissions.
+
+    Attributes:
+        api_key_token (str): The plaintext API key returned by the server.
+    """
+
+    actions: ClassVar[list[FlightAction]] = [FlightAction.API_KEY_CREATE]
+    api_key_token: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "_DoActionResponseAPIKeyCreate":
+        return cls(api_key_token=data["api_key_token"])
+
+
+@dataclass
+class _DoActionResponseAPIKeyStatus(_DoActionResponse):
+    """Response containing the status and metadata of an existing API key.
+
+    Attributes:
+        api_key_fingerprint (str): Unique identifier of the key.
+        created_at_ns (int): Creation timestamp in nanoseconds since epoch.
+        expires_at_ns (int): Expiration timestamp in nanoseconds since epoch.
+        description (str): Optional description provided at key creation.
+    """
+
+    actions: ClassVar[list[FlightAction]] = [FlightAction.API_KEY_STATUS]
+    api_key_fingerprint: str
+    created_at_ns: int
+    expires_at_ns: int
+    description: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "_DoActionResponseAPIKeyStatus":
+        return cls(
+            api_key_fingerprint=data["api_key_fingerprint"],
+            created_at_ns=data["created_at_ns"],
+            expires_at_ns=data["expires_at_ns"],
+            description=data["description"],
+        )
+
+
+@dataclass
+class _DoActionResponseAPIKeyRevoke(_DoActionResponse):
+    """Response confirming revocation of an API key.
+
+    Note:
+        This action does not return any response body from the server.
+        A successful call implies the key has been revoked.
+    """
+
+    actions: ClassVar[list[FlightAction]] = [FlightAction.API_KEY_REVOKE]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "_DoActionResponseAPIKeyRevoke":
+        return cls()
