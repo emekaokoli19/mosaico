@@ -16,7 +16,12 @@ from mosaicolabs.comm.notifications import Notification
 from mosaicolabs.models.query import Query, QueryResponse
 from mosaicolabs.models.query.protocols import QueryableProtocol
 
-from ..enum import FlightAction, OnErrorPolicy, SessionLevelErrorPolicy, APIKeyPermissionEnum
+from ..enum import (
+    APIKeyPermissionEnum,
+    FlightAction,
+    OnErrorPolicy,
+    SessionLevelErrorPolicy,
+)
 from ..handlers import SequenceHandler, SequenceWriter, TopicHandler
 from ..handlers.config import SessionWriterConfig
 from ..helpers import pack_topic_resource_name
@@ -949,10 +954,10 @@ class MosaicoClient:
         self._topic_handlers_cache = {}
 
     def api_key_create(
-        self, 
+        self,
         permissions: list[APIKeyPermissionEnum],
         description: str,
-        expires_at_ns: int | None = None, 
+        expires_at_ns: int | None = None,
     ) -> str | None:
         """
         Creates a new API key with the specified permissions.
@@ -995,10 +1000,7 @@ class MosaicoClient:
             logger.error(f"API key creation failed with error: '{e}'")
             return None
 
-    def api_key_status(
-        self, 
-        api_key_fingerprint: str
-    ) -> APIKeyStatus | None:
+    def api_key_status(self, api_key_fingerprint: str) -> APIKeyStatus | None:
         """
         Retrieves the status and metadata of an API key.
 
@@ -1037,10 +1039,7 @@ class MosaicoClient:
             logger.error(f"API key status query failed with error: '{e}'")
             return None
 
-    def api_key_revoke(
-        self, 
-        api_key_fingerprint: str
-    ) -> None:
+    def api_key_revoke(self, api_key_fingerprint: str) -> None:
         """
         Revokes an API key by its fingerprint.
 

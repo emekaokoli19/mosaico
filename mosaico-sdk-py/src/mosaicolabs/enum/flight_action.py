@@ -91,7 +91,7 @@ class FlightAction(StrEnum):
 
     API_KEY_STATUS = "api_key_status"
     """Checks the status of a specific API key."""
-    
+
     # --- Arch related ---
     VERSION = "version"
     """Requests the backend version"""

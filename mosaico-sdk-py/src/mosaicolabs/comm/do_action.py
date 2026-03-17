@@ -298,4 +298,3 @@ class _DoActionResponseAPIKeyStatus(_DoActionResponse):
             expires_at_ns=data.get("expires_at_ns"),
             description=data.get("description"),
         )
-
