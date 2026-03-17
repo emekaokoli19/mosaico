@@ -299,18 +299,3 @@ class _DoActionResponseAPIKeyStatus(_DoActionResponse):
             description=data.get("description"),
         )
 
-
-@dataclass
-class _DoActionResponseAPIKeyRevoke(_DoActionResponse):
-    """Response confirming revocation of an API key.
-
-    Note:
-        This action does not return any response body from the server.
-        A successful call implies the key has been revoked.
-    """
-
-    actions: ClassVar[list[FlightAction]] = [FlightAction.API_KEY_REVOKE]
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "_DoActionResponseAPIKeyRevoke":
-        return cls()

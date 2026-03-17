@@ -16,7 +16,7 @@ from mosaicolabs.comm.notifications import Notification
 from mosaicolabs.models.query import Query, QueryResponse
 from mosaicolabs.models.query.protocols import QueryableProtocol
 
-from ..enum import FlightAction, OnErrorPolicy, SessionLevelErrorPolicy
+from ..enum import FlightAction, OnErrorPolicy, SessionLevelErrorPolicy, APIKeyPermissionEnum
 from ..handlers import SequenceHandler, SequenceWriter, TopicHandler
 from ..handlers.config import SessionWriterConfig
 from ..helpers import pack_topic_resource_name
@@ -951,9 +951,9 @@ class MosaicoClient:
 
     def api_key_create(
         self, 
-        permissions: list[str], 
+        permissions: list[APIKeyPermissionEnum],
+        description: str,
         expires_at_ns: int | None = None, 
-        description: str | None = None
     ) -> str | None:
         """
         Creates a new API key with the specified permissions.
@@ -964,16 +964,18 @@ class MosaicoClient:
         Args:
             permissions (list[str]): List of permissions for the key (e.g., "read", "write", "delete", "manage").
             expires_at_ns (int | None): Optional expiration timestamp in nanoseconds.
-            description (str | None): Optional description for the key.
+            description (str): Description for the key.
 
         Returns:
             str: The generated API key token or None.
         """
-        payload: dict[str, Any] = {"permissions": permissions}
+        payload: dict[str, Any] = {
+            "permissions": permissions,
+            "description": description,
+        }
         if expires_at_ns is not None:
             payload["expires_at_ns"] = expires_at_ns
-        if description is not None:
-            payload["description"] = description
+
         ACTION = FlightAction.API_KEY_CREATE
 
         try:
@@ -1007,6 +1009,10 @@ class MosaicoClient:
         Returns:
             APIKeyStatus: An object containing the API key's status information, or None if the query fails.
         """
+        if not api_key_fingerprint:
+            logger.error("api_key_fingerprint cannot be empty.")
+            return None
+
         ACTION = FlightAction.API_KEY_STATUS
 
         try:
@@ -1045,20 +1051,25 @@ class MosaicoClient:
         Returns:
             None.
         """
+        if not api_key_fingerprint:
+            logger.error("api_key_fingerprint cannot be empty.")
+            return None
+
         ACTION = FlightAction.API_KEY_REVOKE
+
         try:
-            act_resp = _do_action(
+            _do_action(
                 client=self._control_client,
                 action=ACTION,
                 payload={"api_key_fingerprint": api_key_fingerprint},
-                expected_type=_DoActionResponseAPIKeyRevoke,
+                expected_type=None,
             )
 
-            if act_resp is None:
-                logger.error(f"Action '{ACTION}' returned no response.")
+            return None
 
         except Exception as e:
             logger.error(f"API key revoke failed with error: '{e}'")
+            return None
 
     def close(self):
         """

@@ -9,3 +9,4 @@ from .session_status import (
     SessionStatus as SessionStatus,
 )
 from .topic_level_error_policy import TopicLevelErrorPolicy as TopicLevelErrorPolicy
+from .api_key_permission import APIKeyPermissionEnum as APIKeyPermissionEnum
