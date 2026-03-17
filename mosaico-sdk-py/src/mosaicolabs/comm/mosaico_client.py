@@ -34,7 +34,6 @@ from .do_action import (
     _DoActionNotificationList,
     _DoActionQueryResponse,
     _DoActionResponseAPIKeyCreate,
-    _DoActionResponseAPIKeyRevoke,
     _DoActionResponseAPIKeyStatus,
 )
 from .executor_pool import _ExecutorPool
