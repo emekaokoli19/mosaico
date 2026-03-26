@@ -248,7 +248,6 @@ impl From<Permission> for String {
 impl FromStr for Permission {
     type Err = ApiKeyError;
 
-    /// Empty string is not converted into Permission::None, but treated as an error instead.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "read" => Ok(Permission::Read),
@@ -292,10 +291,10 @@ pub struct ApiKey {
     pub description: String,
 
     /// Creation timestamp
-    pub creation_timestamp: Timestamp,
+    pub created_at: Timestamp,
 
     /// Expiration timestamp
-    pub expiration_timestamp: Option<Timestamp>,
+    pub expires_at: Option<Timestamp>,
 }
 
 impl ApiKey {
@@ -322,8 +321,8 @@ impl ApiKey {
         Self {
             key: Token::new(),
             permission,
-            creation_timestamp: Timestamp::now(),
-            expiration_timestamp: expires_at,
+            created_at: Timestamp::now(),
+            expires_at,
             description,
         }
     }
@@ -335,7 +334,7 @@ impl ApiKey {
 
     /// Check if the API key is expired
     pub fn is_expired(&self) -> bool {
-        if let Some(ts) = self.expiration_timestamp {
+        if let Some(ts) = self.expires_at {
             return ts <= Timestamp::now();
         }
 
