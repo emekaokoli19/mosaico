@@ -1,22 +1,23 @@
-use crate::errors::ServerError;
+use crate::error::Result;
 use arrow::datatypes::{Field, Schema};
 use arrow_flight::{
     FlightDescriptor, FlightEndpoint, FlightInfo, Ticket, flight_descriptor::DescriptorType,
 };
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{info, trace};
-use mosaicod_core::params;
-use mosaicod_core::types::{self, Resource, TopicOntologyMetadata};
+use mosaicod_core::{
+    self as core,
+    error::BoxPublicError,
+    params,
+    types::{self, Resource, TopicOntologyMetadata},
+};
 use mosaicod_db as db;
 use mosaicod_facade as facade;
 use mosaicod_facade::Context;
 use mosaicod_marshal as marshal;
 use mosaicod_marshal::{JsonMetadataBlob, flight};
 
-pub async fn get_flight_info(
-    ctx: &facade::Context,
-    desc: FlightDescriptor,
-) -> Result<FlightInfo, ServerError> {
+pub async fn get_flight_info(ctx: &facade::Context, desc: FlightDescriptor) -> Result<FlightInfo> {
     match desc.r#type() {
         DescriptorType::Cmd => {
             let cmd = marshal::flight::get_flight_info_cmd(&desc.cmd)?;
@@ -81,7 +82,7 @@ pub async fn get_flight_info(
                                 .with_location(topic_handle.locator().url()?)
                                 .with_app_metadata(topic_app_mdata);
 
-                            Ok::<FlightEndpoint, ServerError>(e)
+                            Ok::<FlightEndpoint, BoxPublicError>(e)
                         })
                         .buffer_unordered(params::MAX_BUFFERED_FUTURES)
                         .try_collect::<Vec<FlightEndpoint>>()
@@ -93,7 +94,8 @@ pub async fn get_flight_info(
                     let mut flight_info = FlightInfo::new()
                         .with_descriptor(desc.clone())
                         .with_app_metadata(app_metadata)
-                        .try_with_schema(&schema)?;
+                        .try_with_schema(&schema)
+                        .map_err(|_| core::Error::internal())?;
 
                     for endpoint in endpoints {
                         flight_info = flight_info.with_endpoint(endpoint);
@@ -142,14 +144,15 @@ pub async fn get_flight_info(
                     let flight_info = FlightInfo::new()
                         .with_descriptor(desc.clone())
                         .with_endpoint(endpoint)
-                        .try_with_schema(&schema)?;
+                        .try_with_schema(&schema)
+                        .map_err(|_| core::Error::internal())?;
 
                     trace!("{} done", topic_handle.locator());
                     Ok(flight_info)
                 }
             }
         }
-        _ => Err(ServerError::UnsupportedDescriptor),
+        _ => Err(core::Error::unsupported_descriptor())?,
     }
 }
 
@@ -173,7 +176,7 @@ async fn topic_arrow_schema_with_metadata(
     ontology_metadata: TopicOntologyMetadata<JsonMetadataBlob>,
     topic_handle: &facade::topic::Handle,
     context: &Context,
-) -> Result<Schema, facade::Error> {
+) -> Result<Schema> {
     trace!(
         "{} building schema (+platform metadata)",
         topic_handle.locator()
@@ -189,7 +192,7 @@ async fn topic_arrow_schema_with_metadata(
     {
         Ok(s) => s,
         Err(facade::Error::NotFound(_)) => mosaicod_ext::arrow::empty_schema_ref(),
-        Err(e) => return Err(e),
+        Err(e) => Err(e)?,
     };
 
     // Collect schema metadata
