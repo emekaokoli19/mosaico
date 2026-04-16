@@ -5,7 +5,7 @@ import numpy as np
 
 from mosaicolabs import Serializable
 from mosaicolabs.models import Message
-from mosaicolabs.models.data import ROI, Point3d, Vector2d
+from mosaicolabs.models.data import ROI, Point3d, Vector2d, Vector3d
 from mosaicolabs.models.futures import (
     LaserScan,
     MultiEchoLaserScan,
@@ -17,6 +17,8 @@ from mosaicolabs.models.sensors import (
     CompressedImage,
     GPSStatus,
     Image,
+    Joy,
+    Magnetometer,
     NMEASentence,
     RobotJoint,
 )
@@ -1513,3 +1515,154 @@ class MultiEchoLaserScanAdapter(LaserScannerAdapterBase[MultiEchoLaserScan]):
         ```
         """
         return super().from_dict(ros_data)
+
+
+@register_default_adapter
+class MagneticFieldAdapter(ROSAdapterBase[Magnetometer]):
+    """
+    Adapter for translating ROS MagneticField messages to Mosaico `Magnetometer`.
+
+    **Supported ROS Types:**
+
+    - `sensor_msgs/msg/MagneticField`
+
+    Example:
+        ```python
+        ros_msg = ROSMessage(
+            timestamp=17000,
+            topic="/magnetic_field",
+            msg_type="sensor_msgs/msg/MagneticField",
+            data={
+                "magnetic_field": {
+                    "x": 0.12,
+                    "y": -0.05,
+                    "z": 0.98,
+                }
+            }
+        )
+
+        mosaico_magnetometer = MagneticFieldAdapter.translate(ros_msg)
+        ```
+    """
+
+    ros_msgtype: str | Tuple[str, ...] = "sensor_msgs/msg/MagneticField"
+
+    __mosaico_ontology_type__: Type[Magnetometer] = Magnetometer
+
+    _REQUIRED_KEYS = ("magnetic_field",)
+
+    @classmethod
+    def translate(cls, ros_msg: ROSMessage, **kwargs: Any) -> Message:
+        """
+        Translates a ROS message into a Mosaico Message.
+
+        Returns:
+            Message: The translated message containing a `Magnetometer` object.
+        """
+        return super().translate(ros_msg, **kwargs)
+
+    @classmethod
+    def from_dict(cls, ros_data: dict) -> Magnetometer:
+        """
+        Converts the raw dictionary data into the specific Mosaico type.
+
+        Args:
+            ros_data (dict): The raw dictionary from the ROS message.
+
+        Returns:
+            Magnetometer: The constructed Mosaico Magnetometer object.
+        """
+        _validate_msgdata(cls, ros_data)
+
+        field = ros_data["magnetic_field"]
+
+        return Magnetometer(
+            magnetic_field=Vector3d(
+                x=field["x"],
+                y=field["y"],
+                z=field["z"],
+            )
+        )
+
+    @classmethod
+    def schema_metadata(cls, ros_data: dict, **kwargs: Any) -> Optional[dict]:
+        """
+        Extract the ROS message specific schema metadata, if any.
+
+        MagneticField messages typically do not include additional schema metadata,
+        so this returns None unless extended in the future.
+        """
+        return None
+
+
+@register_default_adapter
+class JoyAdapter(ROSAdapterBase[Joy]):
+    """
+    Adapter for translating ROS Joy messages to Mosaico `Joy`.
+
+    **Supported ROS Types:**
+
+    - `sensor_msgs/msg/Joy`
+
+    Example:
+        ```python
+        ros_msg = ROSMessage(
+            timestamp=17000,
+            topic="/joy",
+            msg_type="sensor_msgs/msg/Joy",
+            data={
+                "axes": [0.0, -1.0, 0.5],
+                "buttons": [0, 1, 0, 1],
+            }
+        )
+
+        mosaico_joy = JoyAdapter.translate(ros_msg)
+        ```
+    """
+
+    ros_msgtype: str | Tuple[str, ...] = "sensor_msgs/msg/Joy"
+
+    __mosaico_ontology_type__: Type[Joy] = Joy
+
+    _REQUIRED_KEYS = (
+        "axes",
+        "buttons",
+    )
+
+    @classmethod
+    def translate(cls, ros_msg: ROSMessage, **kwargs: Any) -> Message:
+        """
+        Translates a ROS message into a Mosaico Message.
+
+        Returns:
+            Message: The translated message containing a `Joy` object.
+        """
+        return super().translate(ros_msg, **kwargs)
+
+    @classmethod
+    def from_dict(cls, ros_data: dict) -> Joy:
+        """
+        Converts the raw dictionary data into the specific Mosaico type.
+
+        Args:
+            ros_data (dict): The raw dictionary from the ROS message.
+
+        Returns:
+            Joy: The constructed Mosaico Joy object.
+        """
+        _validate_msgdata(cls, ros_data)
+
+        return Joy(
+            axes=ros_data.get("axes", []),
+            buttons=ros_data.get("buttons", []),
+        )
+
+    @classmethod
+    def schema_metadata(cls, ros_data: dict, **kwargs: Any) -> Optional[dict]:
+        """
+        Extract the ROS message specific schema metadata, if any.
+
+        Joy messages typically do not include additional schema metadata,
+        so this returns None unless extended in the future.
+        """
+        return None
