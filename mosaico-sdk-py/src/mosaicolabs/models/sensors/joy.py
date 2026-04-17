@@ -41,7 +41,7 @@ class Joy(Serializable):
         ```
     """
 
-    axes: MosaicoType.list_[MosaicoType.float32] = MosaicoField(
+    axes: MosaicoType.list_(MosaicoType.float32) = MosaicoField(
         description="The axes measurements from a joystick."
     )
     """
@@ -68,7 +68,7 @@ class Joy(Serializable):
         ```
     """
 
-    buttons: MosaicoType.list_[MosaicoType.int32] = MosaicoField(
+    buttons: MosaicoType.list_(MosaicoType.int32) = MosaicoField(
         description="The buttons measurements from a joystick."
     )
     """

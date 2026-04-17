@@ -31,7 +31,7 @@ from .geometry_msgs import (
     QuaternionAdapter,
     Vector3Adapter,
 )
-from .helpers import _validate_msgdata, _validate_required_fields, _is_valid_covariance
+from .helpers import _is_valid_covariance, _validate_msgdata, _validate_required_fields
 
 
 @register_default_adapter
@@ -479,9 +479,7 @@ class IMUAdapter(ROSAdapterBase[IMU]):
         if cls._is_data_available(ros_data.get("orientation_covariance")):
             ori_dict = ros_data.get("orientation")
             orientation = QuaternionAdapter.from_dict(ori_dict) if ori_dict else None
-        if orientation and _is_valid_covariance(
-            ros_data.get("orientation_covariance")
-        ):
+        if orientation and _is_valid_covariance(ros_data.get("orientation_covariance")):
             orientation.covariance = ros_data.get("orientation_covariance")
 
         # Optional Field Conversions (Covariance)
