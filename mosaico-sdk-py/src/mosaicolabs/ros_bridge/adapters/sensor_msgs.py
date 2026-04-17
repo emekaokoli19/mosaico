@@ -31,7 +31,7 @@ from .geometry_msgs import (
     QuaternionAdapter,
     Vector3Adapter,
 )
-from .helpers import _validate_msgdata, _validate_required_fields
+from .helpers import _validate_msgdata, _validate_required_fields, _is_valid_covariance
 
 
 @register_default_adapter
@@ -417,16 +417,6 @@ class IMUAdapter(ROSAdapterBase[IMU]):
     _REQUIRED_KEYS = ("linear_acceleration", "angular_velocity")
 
     @staticmethod
-    def _is_valid_covariance(covariance_list: Optional[List[float]]) -> bool:
-        """Checks if a 9-element ROS covariance list is not the 'all zeros' sentinel."""
-        # ROS often uses an all-zero matrix (or a matrix with a special marker)
-        # to indicate 'no covariance provided'.
-        # Assuming all zeros means invalid/unprovided data.
-        if not covariance_list:
-            return False
-        return any(c != 0.0 for c in covariance_list)
-
-    @staticmethod
     def _is_data_available(covariance_list: Optional[List[float]]) -> bool:
         """Checks if an element is provided by the message, e.g. an orientation data is present.
         this is made by checking if the element 0 of the 9-element ROS covariance list equals -1."""
@@ -489,18 +479,18 @@ class IMUAdapter(ROSAdapterBase[IMU]):
         if cls._is_data_available(ros_data.get("orientation_covariance")):
             ori_dict = ros_data.get("orientation")
             orientation = QuaternionAdapter.from_dict(ori_dict) if ori_dict else None
-        if orientation and cls._is_valid_covariance(
+        if orientation and _is_valid_covariance(
             ros_data.get("orientation_covariance")
         ):
             orientation.covariance = ros_data.get("orientation_covariance")
 
         # Optional Field Conversions (Covariance)
-        if cls._is_valid_covariance(ros_data.get("linear_acceleration_covariance")):
+        if _is_valid_covariance(ros_data.get("linear_acceleration_covariance")):
             # ROS covariance is a 9-element array (row-major 3x3).
             # Vector9d is assumed to take these 9 elements directly.
             accel.covariance = ros_data.get("linear_acceleration_covariance")
 
-        if cls._is_valid_covariance(ros_data.get("angular_velocity_covariance")):
+        if _is_valid_covariance(ros_data.get("angular_velocity_covariance")):
             angular_vel.covariance = ros_data.get("angular_velocity_covariance")
 
         return IMU(
@@ -1576,13 +1566,17 @@ class MagneticFieldAdapter(ROSAdapterBase[Magnetometer]):
 
         field = ros_data["magnetic_field"]
 
-        return Magnetometer(
-            magnetic_field=Vector3d(
-                x=field["x"],
-                y=field["y"],
-                z=field["z"],
-            )
+        mag = Vector3d(
+            x=field["x"],
+            y=field["y"],
+            z=field["z"],
         )
+
+        cov = ros_data.get("magnetic_field_covariance")
+        if _is_valid_covariance(cov):
+            mag.covariance = cov
+
+        return Magnetometer(magnetic_field=mag)
 
     @classmethod
     def schema_metadata(cls, ros_data: dict, **kwargs: Any) -> Optional[dict]:
@@ -1611,6 +1605,7 @@ class JoyAdapter(ROSAdapterBase[Joy]):
             topic="/joy",
             msg_type="sensor_msgs/msg/Joy",
             data={
+                # Axes and buttons are list-based fields (not queryable via `.Q`)
                 "axes": [0.0, -1.0, 0.5],
                 "buttons": [0, 1, 0, 1],
             }
