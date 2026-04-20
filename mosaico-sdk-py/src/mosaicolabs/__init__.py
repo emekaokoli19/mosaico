@@ -116,6 +116,7 @@ from .models.sensors import (
     GPSStatus as GPSStatus,
     Image as Image,
     ImageFormat as ImageFormat,
+    Joy as Joy,
     Magnetometer as Magnetometer,
     NMEASentence as NMEASentence,
     Pressure as Pressure,
