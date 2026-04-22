@@ -208,11 +208,11 @@ class Inertia(Serializable):
     | `Inertia.Q.center_of_mass.z` | Numeric | `.eq()`, `.neq()`, `.lt()`, `.gt()`, `.leq()`, `.geq()`, `.in_()`, `.between()` |
     """
 
-    inertia: MosaicoType.list_(MosaicoType.float64) = MosaicoField(
-        description="Flattened 3x3 inertia tensor."
+    inertia: MosaicoType.list_(MosaicoType.float64, list_size=6) = MosaicoField(
+        description="Inertia tensor components [ixx, ixy, ixz, iyy, iyz, izz]."
     )
     """
-    Flattened 3x3 inertia tensor.
+    Inertia tensor represented by its 6 unique components [ixx, ixy, ixz, iyy, iyz, izz].
 
     ### Querying with the **`.Q` Proxy**
     This field is not queryable via the `.Q` proxy (lists are not supported yet).
