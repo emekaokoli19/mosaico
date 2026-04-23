@@ -133,6 +133,8 @@ pub enum ErrorKind {
     UnsupportedTime(String),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Invalid fingerprint `{0}`")]
+    InvalidFingerprint(String),
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +260,10 @@ impl Error {
 
     pub fn to_public_error(self) -> BoxPublicError {
         self.into()
+    }
+
+    pub fn invalid_fingerprint(fingerprint: String) -> Self {
+        Self(ErrorKind::InvalidFingerprint(fingerprint))
     }
 }
 

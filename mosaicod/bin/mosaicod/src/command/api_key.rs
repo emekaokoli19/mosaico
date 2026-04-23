@@ -121,16 +121,11 @@ pub fn auth(auth: ApiKey) -> Result<()> {
         ApiKey::Revoke { fingerprints } => {
             let res: core::error::PublicResult<()> = rt.block_on(async {
                 for fingerprint in fingerprints {
-                    match facade::Auth::try_from_fingerprint(&fingerprint, db.clone()).await {
-                        Ok(fauth) => {
-                            if let Err(e) = fauth.delete().await {
-                                eprintln!("Failed to revoke {}: {}", fingerprint, e);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Invalid fingerprint {}: {}", fingerprint, e);
-                        }
-                    }
+                    let fauth = facade::Auth::try_from_fingerprint(&fingerprint, db.clone())
+                        .await
+                        .map_err(|_| core::Error::invalid_fingerprint(fingerprint.clone()))?;
+
+                    fauth.delete().await?;
                 }
 
                 Ok(())
