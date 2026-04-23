@@ -33,9 +33,10 @@ pub enum ApiKey {
 
     /// Revoke a key
     Revoke {
-        /// Fingerprint of the key to revoke. The fingerprint are the last 8 digits of
-        /// the API key.
-        fingerprint: String,
+        /// Fingerprints of the keys to revoke.
+        /// The fingerprint is the last 8 digits of the API key.
+        #[arg(required = true, num_args = 1..)]
+        fingerprints: Vec<String>,
     },
 
     /// Return the status of a key
@@ -117,11 +118,20 @@ pub fn auth(auth: ApiKey) -> Result<()> {
             println!("{}", policy.key);
         }
 
-        ApiKey::Revoke { fingerprint } => {
+        ApiKey::Revoke { fingerprints } => {
             let res: core::error::PublicResult<()> = rt.block_on(async {
-                let fauth = facade::Auth::try_from_fingerprint(&fingerprint, db).await?;
-
-                fauth.delete().await?;
+                for fingerprint in fingerprints {
+                    match facade::Auth::try_from_fingerprint(&fingerprint, db.clone()).await {
+                        Ok(fauth) => {
+                            if let Err(e) = fauth.delete().await {
+                                eprintln!("Failed to revoke {}: {}", fingerprint, e);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Invalid fingerprint {}: {}", fingerprint, e);
+                        }
+                    }
+                }
 
                 Ok(())
             });
