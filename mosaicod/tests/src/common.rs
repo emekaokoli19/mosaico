@@ -41,7 +41,11 @@ async fn start_server(
     pool: sqlx::Pool<db::DatabaseType>,
     shutdown: ShutdownNotifier,
     tls: Option<server::flight::TlsConfig>,
-) -> tokio::task::JoinHandle<()> {
+) -> (
+    tokio::task::JoinHandle<()>,
+    db::testing::Database,
+    store::testing::Store,
+) {
     // Ensure that params are loaded
     params::load_params_from_env(params::ParamsLoadOptions::testing()).unwrap();
 
@@ -53,24 +57,21 @@ async fn start_server(
         config.tls(tls);
     }
 
+    let store_clone = store.clone();
+    let db_clone = database.clone();
+
     let handle = tokio::task::spawn(async move {
-        if let Err(err) = server::flight::start(
-            config,
-            (*store).clone(),
-            (*database).clone(),
-            Some(shutdown),
-        )
-        .await
+        if let Err(err) = server::flight::start(config, store_clone, db_clone, Some(shutdown)).await
         {
             panic!("flight server error: {}", err);
         }
         println!("server stopped");
     });
 
-    // Wait a little to be sure that server port is binded
+    // Wait a little to be sure that server port is bound
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-    handle
+    (handle, database, store)
 }
 
 pub struct ServerBuilder {
@@ -98,18 +99,25 @@ impl ServerBuilder {
         self
     }
 
+    pub fn enable_tls_with(mut self, cert: &str, private_key: &str) -> Self {
+        self.tls = Some(server::flight::TlsConfig {
+            certificate_file: cert.to_owned().into(),
+            private_key_file: private_key.to_owned().into(),
+        });
+        self
+    }
+
     pub async fn build(self) -> Server {
         let shutdown = ShutdownNotifier::default();
+
+        let (server_join_handle, db, store) =
+            start_server(&self.host, self.port, self.pool, shutdown.clone(), self.tls).await;
+
         Server {
-            server_join_handle: start_server(
-                &self.host,
-                self.port,
-                self.pool,
-                shutdown.clone(),
-                self.tls,
-            )
-            .await,
+            server_join_handle,
             shutdown,
+            db,
+            store,
         }
     }
 }
@@ -131,6 +139,8 @@ impl ServerBuilder {
 pub struct Server {
     shutdown: ShutdownNotifier,
     server_join_handle: tokio::task::JoinHandle<()>,
+    pub db: db::testing::Database,
+    pub store: store::testing::Store,
 }
 
 impl Server {
@@ -138,6 +148,10 @@ impl Server {
     pub async fn shutdown(self) {
         self.shutdown.shutdown();
         let _ = tokio::join!(self.server_join_handle);
+    }
+
+    pub async fn is_shutdown(&self) -> bool {
+        self.server_join_handle.is_finished()
     }
 }
 
@@ -178,6 +192,33 @@ impl ClientBuilder {
         );
 
         self
+    }
+
+    pub fn enable_tls_with(
+        mut self,
+        tls_ca_file: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let cert_str =
+            fs::read(tls_ca_file).map_err(|e| format!("Unable to read certificate: {e}"))?;
+        let cert = tonic::transport::Certificate::from_pem(cert_str);
+
+        self.url = format_endpoint(
+            &self.url.host().unwrap().to_string(),
+            self.url.port().unwrap(),
+            true,
+        )
+        .parse()?;
+
+        dbg!(&self.url.to_string());
+        dbg!(&self.url.domain());
+
+        self.tls = Some(
+            tonic::transport::ClientTlsConfig::new()
+                .ca_certificate(cert)
+                .domain_name("127.0.0.1"),
+        );
+
+        Ok(self)
     }
 
     /// Establishes a connection to a Flight server at the specified host and port.
@@ -251,6 +292,7 @@ pub struct ActionResponse {
     ///
     /// // Extract a Number (returns Option<u64>)
     /// let id = r.response["id"].as_u64().expect("id is not a number");
+    /// ```
     pub response: serde_json::Value,
 }
 
